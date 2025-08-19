@@ -1,0 +1,81 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Frontend para la prueba técnica de fondos de inversión. Crea un bucket S3 y una distribución de CloudFront.'
+
+Resources:
+  # Bucket S3 para alojar los archivos estáticos
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub 'investment-fund-frontend-${AWS::AccountId}'
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+
+  # Origen de CloudFront (OAC) para acceder al bucket S3
+  CloudFrontOriginAccessControl:
+    Type: 'AWS::CloudFront::OriginAccessControl'
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'OAC-for-${S3Bucket}'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Política del bucket S3 para permitir el acceso desde CloudFront
+  S3BucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 'cloudfront.amazonaws.com'
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::${S3Bucket}/*'
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+  # Distribución de CloudFront
+  CloudFrontDistribution:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        HttpVersion: http2
+        DefaultRootObject: index.html
+        Origins:
+          - Id: !Sub 'S3-${S3Bucket}'
+            DomainName: !GetAtt S3Bucket.DomainName
+            S3OriginConfig:
+              OriginAccessIdentity: '' # OAC no usa OAI
+            OriginAccessControlId: !GetAtt CloudFrontOriginAccessControl.Id
+        DefaultCacheBehavior:
+          TargetOriginId: !Sub 'S3-${S3Bucket}'
+          ViewerProtocolPolicy: 'redirect-to-https'
+          CachePolicyId: '658327ea-f89d-4fab-a63d-7e88639e58f6' # CachingOptimized
+          ResponseHeadersPolicyId: '67f7725c-6f97-4210-82d7-5512b31e9d03' # SecurityHeadersPolicy
+        # Manejo de rutas de React Router
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
+Outputs:
+  BucketName:
+    Description: 'Nombre del bucket S3 donde subir los archivos del frontend'
+    Value: !Ref S3Bucket
+  DistributionDomainName:
+    Description: 'URL del frontend desplegado'
+    Value: !GetAtt CloudFrontDistribution.DomainName

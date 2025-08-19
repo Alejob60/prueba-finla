@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Backend para la prueba técnica de fondos de inversión. Crea una Lambda y un API Gateway.'
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Description: 'El nombre del bucket S3 donde se encuentra el código fuente del backend (.zip).'
+  S3Key:
+    Type: String
+    Description: 'La clave (ruta) del archivo .zip del código fuente en el bucket S3.'
+
+Resources:
+  # Rol IAM para la función Lambda
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: LambdaBasicExecution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+
+  # Función Lambda
+  BackendFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: 'InvestmentFundBackendFunction'
+      Handler: 'index.handler' # Asumiendo que el handler está en dist/index.js
+      Runtime: 'nodejs18.x'
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: !Ref S3Key
+      Timeout: 30
+
+  # API Gateway HTTP API
+  HttpApi:
+    Type: 'AWS::ApiGatewayV2::Api'
+    Properties:
+      Name: 'InvestmentFundApi'
+      ProtocolType: 'HTTP'
+      CorsConfiguration:
+        AllowOrigins:
+          - '*' # En un entorno real, restringir al dominio del frontend
+        AllowMethods:
+          - 'GET'
+          - 'POST'
+        AllowHeaders:
+          - 'Content-Type'
+
+  # Integración entre API Gateway y Lambda
+  LambdaIntegration:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: 'AWS_PROXY'
+      IntegrationUri: !GetAtt BackendFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  # Ruta para capturar todas las peticiones
+  ApiRoute:
+    Type: 'AWS::ApiGatewayV2::Route'
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'ANY /{proxy+}'
+      Target: !Join ['/', ['integrations', !Ref LambdaIntegration]]
+
+  # Permiso para que API Gateway invoque la Lambda
+  ApiGatewayInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !GetAtt BackendFunction.Arn
+      Action: 'lambda:InvokeFunction'
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi.ApiId}/*'
+
+Outputs:
+  ApiEndpoint:
+    Description: 'URL del endpoint de la API'
+    Value: !GetAtt HttpApi.ApiEndpoint

@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Backend para la prueba técnica de fondos de inversión.
+  Despliega una API REST con FastAPI en Lambda y una tabla de DynamoDB.
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: python3.9
+    Architectures:
+      - x86_64
+
+Resources:
+  # Tabla de DynamoDB para almacenar todos los datos de la aplicación
+  InvestmentFundTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: InvestmentFundPlatform
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+
+  # Función Lambda que contiene la lógica de la API con FastAPI
+  BackendFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: . # El código fuente está en el mismo directorio
+      Handler: app.main.handler # Usando el handler de Mangum
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref InvestmentFundTable
+          # Las credenciales de AWS se obtienen del rol de ejecución
+      Policies:
+        # Permisos para que la Lambda pueda leer y escribir en la tabla de DynamoDB
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InvestmentFundTable
+
+  # API Gateway que expone la función Lambda
+  ApiGateway:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 100
+        ThrottlingRateLimit: 50
+      CorsConfiguration:
+        AllowOrigins:
+          - "*" # INTERVENCIÓN HUMANA NECESARIA: Cambiar a la URL del frontend en producción
+        AllowHeaders:
+          - Content-Type
+        AllowMethods:
+          - GET
+          - POST
+      DefinitionBody:
+        openapi: 3.0.1
+        info:
+          title: !Ref AWS::StackName
+        paths:
+          /{proxy+}:
+            x-amazon-apigateway-any-method:
+              isDefaultRoute: true
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendFunction.Arn}/invocations
+                payloadFormatVersion: '2.0'
+
+Outputs:
+  ApiEndpoint:
+    Description: "URL del endpoint de la API"
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+  DynamoDBTableName:
+    Description: "Nombre de la tabla de DynamoDB"
+    Value: !Ref InvestmentFundTable
